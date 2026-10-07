@@ -3,21 +3,233 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Spectral Color Mix</title>
+  <title>Paint</title>
   <style>
+    * {
+      box-sizing: border-box;
+    }
+
     body {
       margin: 0;
       min-height: 100vh;
-      display: grid;
-      place-items: center;
+      padding: 20px;
       background: #f3f0e8;
       font: 16px system-ui, sans-serif;
+      color: #252525;
+    }
+
+    main {
+      width: min(100%, 1200px);
+      margin: 0 auto;
+    }
+
+    .workspace-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 12px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      font-weight: 600;
+    }
+
+    .photo-upload {
+      display: grid;
+      justify-items: end;
+      gap: 4px;
+    }
+
+    .photo-upload label {
+      font-weight: 600;
+    }
+
+    .photo-upload input {
+      max-width: 100%;
+      font: inherit;
+    }
+
+    #processing-status {
+      min-height: 1.2em;
+      margin: 0;
+      color: #555148;
+      font-size: 13px;
+      max-height: 160px;
+      overflow: auto;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+
+    .debug-box {
+      width: min(100%, 340px);
+      padding: 9px;
+      background: #292d29;
+      color: #e9e8e2;
+      font: 11px ui-monospace, monospace;
+    }
+
+    .debug-box h2 {
+      margin: 0 0 6px;
+      font: inherit;
+      font-weight: 700;
+    }
+
+    .debug-stages {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 3px 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .debug-stages li {
+      padding: 3px 5px;
+      overflow-wrap: anywhere;
+      color: #c7c9c4;
+    }
+
+    .debug-stages li[aria-current="step"] {
+      background: #e6bd52;
+      color: #24251f;
+      font-weight: 700;
+    }
+
+    .game-scroll {
+      width: 100%;
+      overflow-x: auto;
+      overflow-y: hidden;
+    }
+
+    #game {
+      width: max(1000px, min(100%, 1120px));
+      aspect-ratio: 14 / 9;
+      margin: 0 auto;
+      overflow: hidden;
+    }
+
+    #game canvas {
+      display: block;
+      max-width: 100%;
+      max-height: 100%;
+    }
+
+    @media (max-width: 600px) {
+      body {
+        padding: 12px;
+      }
+
+      .workspace-header {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .photo-upload {
+        justify-items: start;
+      }
+
+      .debug-box {
+        width: min(100%, 420px);
+      }
     }
   </style>
 </head>
 <body>
-  <script src="https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/spectral.js@3.0.0/spectral.min.js"></script>
+  <main>
+    <header class="workspace-header">
+      <h1>Paint</h1>
+      <section class="photo-upload">
+        <label for="photo-file">Choose a photo</label>
+        <input id="photo-file" type="file" accept="image/*">
+        <p id="processing-status" role="status" aria-live="polite"></p>
+      </section>
+      <aside class="debug-box" aria-label="Image processing debug stages">
+        <h2>Pipeline</h2>
+        <ol class="debug-stages">
+          <li data-stage="select">Select photo</li>
+          <li data-stage="decode">Decode source</li>
+          <li data-stage="resize">Fit to canvas</li>
+          <li data-stage="pixels">Read pixel matrix</li>
+          <li data-stage="grayscale">Grayscale</li>
+          <li data-stage="edges">Find Sobel edges</li>
+          <li data-stage="thicken">Dilation passes</li>
+          <li data-stage="lineart">Write transparent lines</li>
+          <li data-stage="texture">Build Phaser texture</li>
+          <li data-stage="ready">Ready to paint</li>
+          <li data-stage="paint">Paint strokes</li>
+          <li data-stage="error">Error</li>
+        </ol>
+      </aside>
+    </header>
+    <div class="game-scroll">
+      <div id="game" aria-label="Color palette, paint bucket, and lineart canvas"></div>
+    </div>
+  </main>
+  <script>
+    window.reportPaintError = (context, error) => {
+      const detail = error instanceof Error ? error.stack || error.message : String(error);
+      console.error(`[paint] ${context}`, error);
+      const status = document.querySelector('#processing-status');
+      if (status) status.textContent = `${context}: ${detail}`;
+      document.querySelector('[data-stage="error"]')?.setAttribute('aria-current', 'step');
+      document.querySelectorAll('[data-stage]:not([data-stage="error"])')
+        .forEach((stage) => stage.removeAttribute('aria-current'));
+    };
+
+    window.addEventListener('error', (event) => {
+      const error = event.error || new Error(
+        event.target instanceof HTMLScriptElement
+          ? `Failed to load script: ${event.target.src}`
+          : `${event.message} at ${event.filename}:${event.lineno}:${event.colno}`,
+      );
+      window.reportPaintError('Uncaught browser error', error);
+    }, true);
+    window.addEventListener('unhandledrejection', (event) => {
+      window.reportPaintError('Unhandled rejection', event.reason);
+    });
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.min.js" crossorigin="anonymous"></script>
   <script src="app.js"></script>
+  <script>
+    const photoInput = document.querySelector('#photo-file');
+    const processingStatus = document.querySelector('#processing-status');
+    const debugStages = document.querySelectorAll('[data-stage]');
+
+    window.setImageDebugStage = (stage) => {
+      debugStages.forEach((item) => {
+        if (item.dataset.stage === stage) item.setAttribute('aria-current', 'step');
+        else item.removeAttribute('aria-current');
+      });
+    };
+    window.setImageReady = () => {
+      processingStatus.textContent = 'Lineart ready. Drag across the image to paint.';
+      window.setImageDebugStage('ready');
+    };
+    window.setImageError = (error) => {
+      window.reportPaintError('Image processing failed', error);
+    };
+
+    photoInput.addEventListener('change', () => {
+      const photo = photoInput.files[0];
+      if (!photo) return;
+
+      if (!window.paintScene?.photoFrame) {
+        window.setImageError('Phaser scene is not running. Check the Phaser script and browser console.');
+        return;
+      }
+
+      processingStatus.textContent = 'Reading image...';
+      try {
+        window.paintScene.loadPhoto(photo);
+      } catch (error) {
+        window.setImageError(error.message);
+      }
+      photoInput.value = '';
+    });
+  </script>
 </body>
 </html>
